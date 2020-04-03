@@ -72,7 +72,7 @@ city_list[is.na(city_list$long), ]
 
 ## get coordinates with baidumap
 pacman::p_load(baidumap)
-options(baidumap.key = 'bH7eovoTlYzl5nGHBekkRs24IPu0Xguk')
+options(baidumap.key = 'YourAPIkey')
 for (i in 1:nrow(city_add)) {
   
   city = city_add$city_name[i]
