@@ -1,0 +1,94 @@
+---
+title: "wild trade CN"
+author: "WXY"
+date: "2020/2/28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+### 1. read in China's data
+
+```{r}
+im_cn <- read.csv("data/ex_all_im_cn_time_75_19_T.csv", stringsAsFactors = F)
+ex_cn <- read.csv("data/ex_cn_im_all_time_75_19_T.csv", stringsAsFactors = F)
+cn_data <- rbind.data.frame(im_cn, ex_cn, stringsAsFactors = F)
+cn_data <- cn_data[cn_data$Importer!=cn_data$Exporter, ]
+
+cn_data$Exporter[which(cn_data$Exporter=="SU")] <- "RU" # Soviet Union -> Russian Fed
+cn_data$Importer[which(cn_data$Importer=="SU")] <- "RU" 
+
+
+```
+
+
+```{r cars}
+## China live species trade
+
+unique(specie$Class)
+unique(specie$Kingdom)
+
+cn_live <- cn_data[cn_data$Term=="live"&
+                     cn_data$Class%in%unique(specie$Class), ]
+
+# if Importer-reported quantity is larger, replace exporter-reported quantity with it. 
+im_as_ex <- which((cn_live$Exporter.reported.quantity - 
+               cn_live$Importer.reported.quantity)<0) 
+cn_live$Exporter.reported.quantity[im_as_ex] <- cn_live$Importer.reported.quantity[im_as_ex]
+
+# relace exporter-reported quantity which is NA with importer-reported quantity.
+na <- is.na(cn_live$Exporter.reported.quantity)
+cn_live$Exporter.reported.quantity[na] <- cn_live$Importer.reported.quantity[na]
+
+# print trades whose unit is not ""(individual number)
+unique(cn_live$Unit)
+unit_un <- unique(cn_live$Taxon[which(cn_live$Unit!="")])
+
+```
+
+"
+Indotestudo elongata(缅甸陆龟): 30 cm long and 3.5 kg, 
+Ptyas mucosus(滑鼠蛇): 150 to 195 cm  and 0.877 to 0.940 kg, 
+Naja naja(眼镜蛇): 100 to 150 cm and 4 kg, 
+Lissemys punctata(印度鳖): 26 cm, 
+Hirudo medicinalis(药用水蛭): 0.001 kg, 
+Scleractinia spp.(石珊瑚类): , 
+Seriatopora spp.(珊瑚科):, 
+Varanus salvator(巨蜥): 1.5–2 m and 4 kg, 
+Hippocampus algiricus(海马): 7 ounces to 1 pound, 
+Cheilinus undulatus(苏眉鱼): 0.5 to 2 m and 180 kg, 
+Pelodiscus sinensis(中华鳖): 33 cm and 2 kg, 
+Haliotis midae(石决明, 蚌): 1 pound, 
+Anguilla anguilla(欧洲鳗鲡): 60–80 cm and 1.5 - 3 kg, 
+Scleropages formosus(Asian arowana, 龙鱼): 90 cm and 5-17 kg, 
+Ophiophagus hannah(眼镜王蛇): 3 to 4 m and 6 kg, 
+Candoia spp.(树蚺科):  60 cm to 1.8 m and 1.0–1.2 kg, 
+Mauremys reevesii(中华池塘龟): 14 to 20 cm and 0.5 kg, 
+Huso dauricus x acipenser schrenckii(鳇鱼): 5.6 m and 1000 kg, 
+Huso dauricus(kaluga, 达氏鳇): 1000 kg, 
+Acipenser gueldenstaedtii(Russian Sturgeon俄罗斯鲟): 235 cm and 115 kg, 
+Acipenser schrenckii(Japanese sturgeon日本鲟): 3 m and 190 kg, 
+Acipenseridae hybrid(鲟鱼科杂交): , 
+Acipenser baerii(西伯利亚鲟): 65 kg, 
+Mustela sibirica(黄鼬): male 28–39 cm and  0,650–0.820 g, female 25–30.5 cm and 0.360–0.430 g 
+"
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

@@ -1,0 +1,434 @@
+---
+title: "International Wild Species Trade"
+author: "WXY"
+date: "2020/2/24"
+output: html_document
+---
+
+
+## Intro
+
+This is a simple analysis of data from international wild species trade, including plants and animals. For more details on this data and related information, see <https://trade.cites.org/> <https://cites.org/eng/news/world/19/7.php>.
+It should be noted that this presentation is only personal exploratory and has no relation to CITES and other organizations.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# set working directory for all code chunks
+knitr::opts_knit$set(root.dir = "C:/Users/WXY/Documents/R_learning/wild_trade")
+library(dplyr)
+library(maps)
+library(geosphere)
+library(ggplot2)
+library(ggraph)
+library(rworldmap)
+library(plyr)
+library(data.table)
+library(ggthemes)
+library(shadowtext)
+library(ggrepel)
+```
+
+
+## read data in
+
+### 1. all the data of parties
+```{r datasets echo=FALSE}
+# list data sets downloaded from CITES.org
+files <- list.files("data/Trade_database_download_v2019.2/", pattern = "(.*)csv", full.names = T) 
+
+# load all data sets at once
+d <- lapply(files, function(x){
+  read.csv(x, stringsAsFactors = F, as.is=TRUE, header=TRUE)}) # it costs about 1 minute...
+
+# change sets' names
+names(d) <- gsub(".*/(.*)\\..*", "\\1", files)
+
+# test data set
+trade_db_1 <- read.csv("data/Trade_database_download_v2019.2/trade_db_1.csv", stringsAsFactors = F, as.is=TRUE, header=TRUE)
+class(trade_db_1$Quantity)
+
+```
+
+### anomalies in data 
+```{r anomalies echo=FALSE}
+
+inaccrt <- which(trade_15$Year%in%c("Mammalia", "Carnivora")) 
+# inaccurate rows: 139513 247357
+trade_15[inaccrt, ] 
+
+trade_15[inaccrt[1], ] <- c("", "", "Macaca fascicularis", as.character(trade_15[inaccrt[1], 1:(ncol(trade_15))])[1:16])
+
+trade_15[inaccrt[2], ] <- as.character(c("", "", "Lycalopex", "culpaeus", "Mammalia", trade_15[inaccrt[2], 1:15]))
+
+```
+
+
+### region code
+
+```{r country, echo=FALSE}
+# states code
+region_code <- read.csv("data/region_code.csv", stringsAsFactors = F)
+
+# Former Soviet Union	is treated as Russia in this analysis
+region_code <- region_code[region_code$code!="SU", ]
+
+```
+
+```{r notrun! geolocation}
+library(rnaturalearth)
+library(rgdal);library(stringr)
+
+countries <- ne_countries()
+# province <- ne_states(iso_a2 = 'CN')
+
+countries$longitude <- coordinates(countries)[,1]
+countries$latitude <- coordinates(countries)[,2]
+
+countries_xy <- countries@data %>%
+  select(iso_a2, admin, longitude, latitude)
+
+region_code <- left_join(region_code, countries_xy, by = c("code"="iso_a2"))
+
+region_code[region_code$name=="Hong Kong", c("longitude", "latitude")] <- c("114.1628131", "22.2793278")
+
+region_code$longitude <- as.numeric(region_code$longitude)
+region_code$latitude <- as.numeric(region_code$latitude)
+
+region_code <- region_code[which(!is.na(region_code$admin)), ]
+
+```
+
+
+## another way: download from website
+
+```{r}
+
+csv_url <- paste0("https://trade.cites.org/cites_trade/exports/download?", #download/view_results?
+                  "filters[time_range_start]=", 1995, 
+                  "&filters[time_range_end]=", 2018, 
+                  "&filters[exporters_ids][]=", 160,
+                  "&filters[importers_ids][]=", "all_imp", 
+                  "&filters[sources_ids][]=", "all_sou", 
+                  "&filters[purposes_ids][]=", "all_pur", 
+                  "&filters[terms_ids][]=", 57,  # 57:live
+                  "&filters[taxon_concepts_ids][]=", 23, # Animalia
+                  "&filters[reset]=", 
+                  "&filters[selection_taxon]=", "taxonomic_cascade", 
+                  "&web_disabled=", 
+                  "&filters[report_type]=",  # "comptab" for web view
+                  "comptab&filters[csv_separator]=", "comma")
+
+test_csv <- read.csv(csv_url)
+
+
+```
+
+
+
+## 2. Clean data 
+
+## Whole data set
+
+```{r}
+#specie_list <- read.csv("data/cites_listings_2020-02-27 15_47_comma_separated.csv", stringsAsFactors = F)
+unique(specie_list$Class)
+filt_data <- function(data){
+  # filter out na and retain CN 
+  result <- data[data[, select_col[1]]==value|data[, select_col[2]]==value&
+                       !is.na(data[, select_col[1]])&!is.na(data[, select_col[2]]), ]
+  return(result)
+}
+
+select_col = c("Exporter", "Importer")
+value = "CN"
+d_cn <- lapply(d, filt_data)
+
+# transform list into dataframe
+# system.time({cn_df <- d_cn %>% do.call(rbind, .)}) # much more time
+system.time({cn_df <- as.data.frame(data.table::rbindlist(d_cn))}) # faster
+
+# but the type of Quantity has been changed
+class(cn_df$Quantity) 
+cn_df$Quantity <- as.numeric(cn_df$Quantity)
+
+# filter 哺乳纲 鸟纲 爬行纲 两栖纲 板鳃纲 辐鳍鱼纲 多鳍纲 肺鱼亚纲
+cn_live <- cn_df[cn_df$Term=="live"&
+                   cn_df$Class%in%c("Mammalia", "Aves", "Amphibia", "Reptilia", 
+                                    "Elasmobranchii", "Actinopteri"), ] 
+
+# filter out regions that are not included in 'naturalearth' map
+cn_live <- cn_live[cn_live$Importer%in%region_code$code&
+                     cn_live$Exporter%in%region_code$code, ]
+unique(cn_live$Unit)
+
+
+```
+
+
+
+
+```{r}
+# exchange unit of quantity
+taxon_inf <- unique(cn_live$Taxon[which(cn_live$Unit!="")])
+print(taxon_inf)
+
+cn_live$Quantity[which(cn_live$Unit=="ml")] <- cn_live$Quantity[which(cn_live$Unit=="ml")]/1000 # 'ml' -> 'kg', 1kg~=1000mg~=1000ml
+cn_live$Unit[which(cn_live$Unit=="ml")] <- "kg" 
+
+# individual animal's wight
+taxon_weight <- read.csv("data/taxon_weight.csv", stringsAsFactors = F,encoding = "utf-8")
+
+for (i in which(cn_live$Unit!="")) { # 'kg' -> 'number of individuals'
+  cn_live$Quantity[i] <- round(cn_live$Quantity[i]/taxon_weight$weight[taxon_weight$taxon==cn_live$Taxon[i]])
+
+}
+```
+
+
+## trade network 
+
+### create edge-like network combined with geolocations
+
+```{r}
+# add up number of all lifes by trade relation
+cn_live$Exporter[cn_live$Exporter=="SU"] <- "RU" # Soviet Union > Russia
+cn_live$Importer[cn_live$Importer=="SU"] <- "RU" # Soviet Union > Russia
+names(cn_live)
+edge_liv <- cn_live %>% select(Importer, Exporter, Quantity) %>% 
+  filter(Quantity>0) %>%
+  group_by(Importer, Exporter) %>%
+  summarise_all(list(sum)) 
+
+# by year
+edge_liv_byyear <- cn_live %>% select(., Importer, Exporter, Year, Quantity) %>% 
+  group_by(Importer, Exporter, Year) %>%
+  summarise_all(list(sum)) 
+
+# join country location
+region_liv <- edge_liv %>%
+  left_join(region_code %>% select(code, longitude, latitude, admin), 
+            by = c('Importer' = 'code')) %>%
+  dplyr::rename(lon_im = longitude, lat_im = latitude, admin_im = admin) %>%
+  left_join( region_code %>% select(code, longitude, latitude, admin), 
+            by = c('Exporter' = 'code')) %>%
+  dplyr::rename(lon_ex = longitude, lat_ex = latitude, admin_ex = admin) %>%
+  filter(Quantity>0)
+
+region_liv$type <- ifelse(region_liv$Exporter=="CN", "export", "import")
+
+quantile(country_flow$Quantity, probs = seq(0,1,0.4))
+country_flow$Quantity_lev <- car::recode(country_flow$Quantity, 
+                    "0:200 = '[0, 200]'; 
+                    200:20000 = '(200, 20000]';
+                    20000:2630353 = '(20000, 2630353]'")
+
+country_flow$Quantity_lev <- factor(country_flow$Quantity_lev, levels = c("[0, 200]", "(200, 20000]", "(20000, 2630353]"))
+
+
+```
+
+
+### calculate spherical distance between exporter and importer 
+
+```{r}
+library(data.table)
+setDT(country_flow) # data.table is faster in manipulation
+ex.loc <- country_flow[ , .(lon_ex, lat_ex)] # exporters' locations(CN)
+im.loc <- country_flow[ , .(lon_im, lat_im)] # importers' locations
+
+
+# calculate routes between exporter and importers 
+routes <- gcIntermediate(ex.loc, im.loc, 100, breakAtDateLine=FALSE, addStartEnd=FALSE, sp=TRUE)
+class(routes) # SpatialLines object
+
+
+# Convert a SpatialLines object into SpatialLinesDataFrame, so we can fortify and use it in ggplot
+# create empty data frate  
+ids <- data.frame(ID=NULL)
+# fill data frame with IDs for each line
+for (i in (1:length(routes))) {
+  id <- data.frame(ID = routes@lines[[i]]@ID)
+  ids <- rbind(ids, id) 
+  }
+
+# colnames(ids)[1] <- "ID" # rename ID column
+
+# convert SpatialLines into SpatialLinesDataFrame using IDs as the data frame
+routes <- SpatialLinesDataFrame(routes, data = ids, match.ID = T)
+
+# Fortify routes (convert to data frame) 
+country_flow$id <-as.character(c(1:nrow(country_flow)))
+routes_df <- fortify(routes, region= "ID") %>% 
+   left_join(., country_flow, by= ("id"))
+
+
+```
+
+
+
+## plot them onto map
+
+### Recenter coordinates 
+Prime Meridian-centered to China-centered
+
+```{r}
+
+center <- 115 
+
+routes_df$long.recenter <-  ifelse(routes_df$long  < center - 180 , routes_df$long + 360, routes_df$long) 
+
+worldmap <- map_data ("world")
+worldmap$long.recenter <-  ifelse(worldmap$long  < center - 180 , worldmap$long + 360, worldmap$long)
+
+### Function to regroup split lines and polygons
+# takes dataframe, column with long and unique group variable, returns df with added column named group.regroup
+RegroupElements <- function(df, longcol, idcol){  
+    g <- rep(1, length(df[,longcol]))
+    if (diff(range(df[,longcol])) > 300) {          # longitude within recentered group differs more than 300 deg
+      d <- df[,longcol] > mean(range(df[,longcol])) # find out recentered points, mark them
+      g[!d] <- 1     # points that not moved
+      g[d] <- 2      # points that are moved
+    }
+    g <-  paste(df[, idcol], g, sep=".") # new group id, it create some new polygons inside the "old group id" 
+    df$group.regroup <- g
+    df
+  }
+
+### Function to close regrouped polygons
+# takes dataframe, checks if 1st and last longitude value are the same, if not, inserts first as last and reassigns order variable
+  ClosePolygons <- function(df, longcol, ordercol){
+    if (df[1,longcol] != df[nrow(df),longcol]) {
+      tmp <- df[1,]
+      df <- rbind(df,tmp)
+    }
+    o <- c(1: nrow(df))  # rassign the order variable
+    df[,ordercol] <- o
+    df
+  }
+
+# now regroup
+routes_df.rg <- ddply(routes_df, .(id), RegroupElements, "long.recenter", "id")
+worldmap.rg <- ddply(worldmap, .(group), RegroupElements, "long.recenter", "group")
+
+# close polys
+worldmap.cp <- ddply(worldmap.rg, .(group.regroup), ClosePolygons, "long.recenter", "order")
+
+label <- routes_df[!duplicated(routes_df[,c("Importer")]), c("lon_im", "lat_im", "Importer")]
+label$lon_im <-  ifelse(label$lon_im  < center - 180 , label$lon_im + 360, label$lon_im) 
+
+```
+
+### ocean polygons for later use (coloured back underground)
+
+```{r ocean}
+
+n = 1000 # split global map into n strips,  narrower is better for covering entire sphere 
+ocean = data.frame(long = numeric(n*5), # 5 points is needed for a quadrangle polygon
+                   lat = numeric(n*5), 
+                   group = numeric(n*5), 
+                   order = integer(n*5), 
+                   region = character(n*5), stringsAsFactors = FALSE)
+
+ocean$group = rep(1:n, each = 5)
+ocean$order = rep(1:5, n) 
+ocean$region = paste("Ocean", ocean$group, sep = "")
+lonmax <- max(worldmap.cp$long)-min(worldmap.cp$long)
+ocean$long = c(-180, -180, -180+lonmax/n, -180+lonmax/n, -180) + (ocean$group-1)*(lonmax/n) # each spans (360/n) 
+ocean$lat = rep(c(-90, 90, 90, -90, -90), n) # create latitude of each points, a bit largaer than 90
+
+
+ocean$long.recenter <- ifelse(ocean$long < center - 180 , ocean$long + 360, ocean$long) 
+ocean.rg <- ddply(ocean, .(group), RegroupElements, "long.recenter", "group") 
+ocean.cp <- ddply(ocean.rg, .(group.regroup), ClosePolygons, "long.recenter", "order")
+```
+
+
+### map
+```{r echo=TRUE}
+library(RColorBrewer)
+
+theme_custom <- theme(panel.grid = element_blank(),
+                      axis.text = element_blank(), 
+                      axis.ticks = element_blank(), 
+  axis.title = element_blank(), 
+  panel.background = element_rect(fill = "#8894a1"), #063e66
+  plot.margin = unit(c(0.1, 0.1, 0.5, 0.1), 'cm'), 
+  legend.position = "bottom", 
+  )
+
+base_plot <- ggplot(routes_df.rg) + 
+  geom_polygon(data = ocean.cp,     
+                 aes(long.recenter,lat, group=group.regroup), # ocean_map
+                 size = 0.2, 
+                 fill="#b1c5d4", #008ca1
+                 colour = "#b1c5d4") + 
+  geom_polygon(data = worldmap.cp, 
+             aes(x = long.recenter, y = lat, group = group.regroup), # world_map
+             fill = "#CECECE", 
+             color = "grey65",
+             size = 0.2) +
+  geom_path(aes(long.recenter, lat, group = group.regroup, color = type, size = Quantity_lev), 
+              size=0.4, alpha= 0.5) + 
+  scale_size_continuous(guide = FALSE, range = c(0.25, 2)) +
+  scale_color_manual(name = "野生动物贸易", aesthetics = "colour",
+                    values = c(brewer.pal(5,"Reds")[3], brewer.pal(5,"Blues")[3]),
+                    labels = c("进口", "出口"), 
+                    guide = guide_legend(reverse = TRUE)) +
+  geom_point(data = label, 
+             aes(x = lon_im, y = lat_im),  
+             shape = 21, 
+             size = 3,
+             fill = 'white', 
+             color = 'black', 
+             stroke = 0.5) + 
+  geom_shadowtext(data = label, 
+                  aes(x = lon_im, y = lat_im, label = Importer), 
+                  fontface = "bold", 
+                  color="black", 
+                  bg.color="white", 
+                  vjust=-1, 
+                  size=2.5) + 
+  geom_text_repel()
+  theme_custom + 
+  coord_fixed(xlim = c(-150, 180), ylim = c(-55, 80)) +
+  coord_map("ortho", orientation=c(61, 90, 0))
+  
+ggsave("sphere3.png")
+```
+
+```{r}
+ggplot() +
+  geom_polygon(data = map_data('world'), 
+               aes(x = long, y = lat, group = group),
+                               fill = "#CECECE", color = "#515151", size = 0.15) + 
+  geom_curve(data = country_flow[order(country_flow$Quantity, decreasing = T)[1:10], ], 
+  aes(x = lon_ex, y = lat_ex, xend = lon_im, yend = lat_im,     # draw edges as arcs
+                 color = type, size = Quantity),
+             curvature = 0.33, alpha = 0.5) +
+  scale_size_continuous(guide = FALSE, range = c(0.5, 2)) +
+  coord_fixed( ylim = c(-60, 80)) +
+  coord_map("ortho", orientation=c(61, 90, 0))
+```
+
+
+### interactive
+```{r}
+library(leaflet)
+library(RColorBrewer)
+
+hover <- paste0(flows$origins, " to ", 
+                flows$destinations, ': ', 
+                as.character(flows$counts))
+
+pal <- colorFactor(brewer.pal(4, 'Set2'), flows$origins)
+
+leaflet() %>%
+  addProviderTiles('CartoDB.Positron') %>%
+  addPolylines(data = flows, weight = ~counts, label = hover, 
+               group = ~origins, color = ~pal(origins)) %>%
+  addLayersControl(overlayGroups = unique(flows$origins), 
+                   options = layersControlOptions(collapsed = FALSE))
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

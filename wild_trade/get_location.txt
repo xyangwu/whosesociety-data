@@ -1,0 +1,8 @@
+# get locations for countries that cannot be found in natural earth data
+for(i in country_code$name[is.na(country_code$longitude)]){
+  address <- gsub(" ", "%20", i)
+  try({
+  country_code[country_code$name==i, c("longitude", "latitude")] <-  fromJSON(paste0("https://nominatim.openstreetmap.org/search/", address, "?format=json&addressdetails=0&limit=1"))[, c("lon", "lat")]
+Sys.sleep(2)
+})
+}
